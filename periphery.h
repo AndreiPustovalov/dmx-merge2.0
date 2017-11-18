@@ -49,4 +49,11 @@ static inline int get_green_state() {
 	return P2OUT | BIT6;
 }
 
+static inline void uca2_read() {
+	P2OUT &= ~BIT4;
+}
+
+static inline void uca2_write() {
+	P2OUT |= BIT4;
+}
 #endif /* PERIPHERY_H_ */

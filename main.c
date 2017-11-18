@@ -16,10 +16,17 @@ volatile uint8_t currentCold[3] = { 0x9f };
 volatile uint8_t currentBra[3] = { 0 };
 volatile uint8_t active = 0;
 
-volatile uint8_t last[8] = {0,0,0,0,0,0,0,0};
-volatile uint8_t last_reg[8];
-volatile uint8_t r;
-volatile uint8_t last_p = 0;
+volatile uint8_t pc_rx_buf[8];
+volatile uint8_t pc_tx_cnt = 0;
+volatile uint8_t pc_tx_buf[8];
+volatile uint8_t pc_flag = 0;
+volatile uint8_t pc_rx_cnt = 0;
+
+void pc_start_tx(uint8_t cnt) {
+	uca2_write();
+	pc_tx_cnt = cnt;
+	UCA2TXBUF = pc_tx_buf[0];
+}
 
 void processSwitch(uint8_t c, uint8_t w, uint8_t b, uint8_t index) {
 	uint8_t change = 0;
@@ -36,7 +43,7 @@ void processSwitch(uint8_t c, uint8_t w, uint8_t b, uint8_t index) {
 		change = 1;
 	}
 	if (change){
-//		active = index;
+		active = index;
 		__no_operation();
 	}
 }
@@ -55,7 +62,9 @@ void main(void) {
     P2DIR |= BIT4 | BIT5 | BIT6;  // Set pins to output.
                                   // P2.4 - UCA2 R/W
                                   // P2.5 - Yellow LED
-                                  // P2,6 - Green LED
+                                  // P2.6 - Green LED
+
+    uca2_read();
 
     __bis_SR_register(GIE);       // interrupts enabled
     while (1) {
@@ -63,52 +72,59 @@ void main(void) {
  			UCA0IE &= ~UCRXIE;        // Disable USCI_A0 RX interrupt (Switch A)
 			uint8_t zero = switchA_r[0];
 			uint8_t warm = switchA_r[4];
+			warm = switchA_r[4];
 			uint8_t cold = switchA_r[3];
 			uint8_t bra  = switchA_r[7];
-			asm (
-				"        MOV.B     r13,&r+0"
-			);
-			last[last_p % 8] = 1;
-			last_reg[last_p++ % 8] = r;
 			UCA0IE |= UCRXIE;         // Enable USCI_A0 RX interrupt (Switch A)
 			if (zero == 0) {
-				last[last_p % 8] = 5;
-				last_reg[last_p++ % 8] = r;
 				processSwitch(cold, warm, bra, 0);
 			}
-			last[last_p % 8] = 4;
-			last_reg[last_p++ % 8] = r;
     	}
-//    	{
-//			UCA1IE &= ~UCRXIE;        // Disable USCI_A1 RX interrupt (Switch B)
-//			uint8_t zero = switchB_r[0];
-//			uint8_t cold = switchB_r[3];
-//			uint8_t warm = switchB_r[4];
-//			uint8_t bra  = switchB_r[7];
-//			UCA1IE |= UCRXIE;         // Enable USCI_A1 RX interrupt (Switch B)
-//			if (zero == 0) {
-//				processSwitch(cold, warm, bra, 1);
-//			}
-//    	}
+    	{
+			UCA1IE &= ~UCRXIE;        // Disable USCI_A1 RX interrupt (Switch B)
+			uint8_t zero = switchB_r[0];
+			uint8_t cold = switchB_r[3];
+			cold = switchB_r[3];
+			uint8_t warm = switchB_r[4];
+			uint8_t bra  = switchB_r[7];
+			UCA1IE |= UCRXIE;         // Enable USCI_A1 RX interrupt (Switch B)
+			if (zero == 0) {
+				processSwitch(cold, warm, bra, 1);
+			}
+    	}
+    	if (pc_flag) {
+			UCA2IE &= ~UCRXIE;        // Disable USCI_A2 RX interrupt (PC)
+			pc_flag = 0;
+			uint8_t cmd = pc_rx_buf[0];
+			uint8_t cold = pc_rx_buf[1];
+			uint8_t warm = pc_rx_buf[2];
+			uint8_t bra = pc_rx_buf[3];
+			UCA2IE |= UCRXIE;         // Enable USCI_A2 RX interrupt (PC)
+			switch (cmd) {
+			case 1:
+				processSwitch(cold, warm, bra, 2);
+				pc_tx_buf[0] = cmd;
+				pc_tx_buf[1] = 0;
+				pc_start_tx(2);
+				break;
+			case 2:
+				break;
+			}
+    	}
     }
 }
 
 #define SWAP(x,y) do {   \
-	volatile uint8_t * _x = x;      \
-	x = y;                \
-	y = _x;                \
+	volatile uint8_t * _x = x;    \
+	x = y;               \
+	y = _x;              \
 } while(0)
 
 // USCI_A0 - Switch A read, Dimmer write
 #pragma vector=USCI_A0_VECTOR
 __interrupt void USCI_A0_ISR(void)
 {
-	asm (
-		"        MOV.B     r13,&r+0"
-	);
-	last[last_p % 8] = 2;
-	last_reg[last_p++ % 8] = r;
-	static uint16_t switchA_w_cnt = 0, switchA_r_cnt = 0;
+	static uint16_t switchA_tx_cnt = 0, switchA_rx_cnt = 0;
 	static uint16_t read_time = 0;
 	static volatile uint8_t switchA_w_buf[8];
 	static volatile uint8_t *switchA_w = switchA_w_buf;
@@ -120,15 +136,15 @@ __interrupt void USCI_A0_ISR(void)
         {
         	uint8_t x = UCA0RXBUF;
         	if (time - read_time >= 10) {
-        		switchA_r_cnt = 0;
+        		switchA_rx_cnt = 0;
         	}
         	read_time = time;
-        	if (switchA_r_cnt < 8) {
-        		switchA_w[switchA_r_cnt++] = x;
+        	if (switchA_rx_cnt < 8) {
+        		switchA_w[switchA_rx_cnt++] = x;
         	} else {
-        		++switchA_r_cnt;
+        		++switchA_rx_cnt;
         	}
-        	if (8 == switchA_r_cnt) {
+        	if (8 == switchA_rx_cnt) {
         		SWAP(switchA_w, switchA_r);
         	}
         }
@@ -136,8 +152,8 @@ __interrupt void USCI_A0_ISR(void)
         case USCI_UART_UCTXIFG:	            // TXIFG
         	if (!get_green_state())
         		break;
-        	++switchA_w_cnt;
-        	switch (switchA_w_cnt) {
+        	++switchA_tx_cnt;
+        	switch (switchA_tx_cnt) {
         	case 1:
 				UCA0TXBUF = currentCold[active];
         		break;
@@ -149,9 +165,9 @@ __interrupt void USCI_A0_ISR(void)
         	default:
         		UCA0TXBUF = 0;
         	}
-        	if (switchA_w_cnt == 17) {      // TX over?
+        	if (switchA_tx_cnt == 17) {      // TX over?
         		green_led_off();
-        		switchA_w_cnt = 0;
+        		switchA_tx_cnt = 0;
         	}
         	break;
         case USCI_UART_UCSTTIFG: break;     // TTIFG
@@ -159,18 +175,13 @@ __interrupt void USCI_A0_ISR(void)
         default:
         	break;
     }
-	asm (
-		"        MOV.B     r13,&r+0"
-	);
-	last[last_p % 8] = 3;
-	last_reg[last_p++ % 8] = r;
 }
 
 // USCI_A1 - Switch B read
 #pragma vector=USCI_A1_VECTOR
 __interrupt void USCI_A1_ISR(void)
 {
-	static uint16_t switchB_r_cnt = 0;
+	static uint16_t switchB_rx_cnt = 0;
 	static uint16_t read_time = 0;
 	static volatile uint8_t switchB_w_buf[8];
 	static volatile uint8_t *switchB_w = switchB_w_buf;
@@ -182,15 +193,15 @@ __interrupt void USCI_A1_ISR(void)
         {
         	uint8_t x = UCA1RXBUF;
         	if (time - read_time >= 10) {
-        		switchB_r_cnt = 0;
+        		switchB_rx_cnt = 0;
         	}
         	read_time = time;
-        	if (switchB_r_cnt < 8) {
-        		switchB_w[switchB_r_cnt++] = x;
+        	if (switchB_rx_cnt < 8) {
+        		switchB_w[switchB_rx_cnt++] = x;
         	} else {
-        		++switchB_r_cnt;
+        		++switchB_rx_cnt;
         	}
-        	if (8 == switchB_r_cnt) {
+        	if (8 == switchB_rx_cnt) {
         		SWAP(switchB_w, switchB_r);
         	}
         }
@@ -200,29 +211,50 @@ __interrupt void USCI_A1_ISR(void)
         case USCI_UART_UCTXCPTIFG: break;   // TXCPTIFG
         default: break;
     }
-	last[last_p % 8] = 7;
 }
+
+static volatile uint16_t pc_read_time = 0;
 
 // USCI_A2 - PC r\w
 #pragma vector=USCI_A2_VECTOR
 __interrupt void USCI_A2_ISR(void)
 {
+	static uint8_t tx_cnt = 1;
     switch (__even_in_range(UCA2IV, 4))
     {
         case USCI_NONE: break;              // No interrupt
-        case USCI_UART_UCRXIFG: break;      // RXIFG
-        case USCI_UART_UCTXIFG:	break;      // TXIFG
+        case USCI_UART_UCRXIFG:             // RXIFG
+        {
+        	uint8_t x = UCA2RXBUF;
+        	pc_read_time = time;
+        	if (pc_rx_cnt < 8) {
+        		pc_rx_buf[pc_rx_cnt++] = x;
+        	} else {
+        		uca2_read();
+        	}
+        }
+		break;
+        case USCI_UART_UCTXIFG:	            // TXIFG
+        {
+        	if (tx_cnt < pc_tx_cnt) {
+				UCA2TXBUF = pc_tx_buf[tx_cnt++];
+        	}
+        }
+		break;
         case USCI_UART_UCSTTIFG: break;     // TTIFG
         case USCI_UART_UCTXCPTIFG: break;   // TXCPTIFG
         default: break;
     }
-	last[last_p % 8] = 8;
 }
 
 #pragma vector=TIMER1_A0_VECTOR
 __interrupt void TIMER1_A0_ISR(void)
 {
 	++time;
+	if (pc_rx_cnt && (time - pc_read_time > 15)) {
+		pc_rx_cnt = 0;
+		pc_flag = 1;
+	}
 	switch (time & 0x3f) {
 	case 61:
 		pin_down();
@@ -235,5 +267,4 @@ __interrupt void TIMER1_A0_ISR(void)
 		UCA0TXBUF = 0;
 		break;
 	}
-	last[last_p % 8] = 9;
 }

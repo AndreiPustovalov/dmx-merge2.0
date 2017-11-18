@@ -89,9 +89,6 @@ void setup_timers() {
     TA1CTL = TASSEL_2 | MC_1;       // SMCLK, upmode, clear TAR
 }
 
-extern volatile uint8_t last[8];
-extern volatile uint8_t last_p;
-
 #pragma vector=UNMI_VECTOR
 __interrupt void NMI_ISR(void)
 {
@@ -103,5 +100,4 @@ __interrupt void NMI_ISR(void)
         status = UCS_clearAllOscFlagsWithTimeout(1000);
     }
     while(status != 0);
-	last[last_p % 8] = 9;
 }
