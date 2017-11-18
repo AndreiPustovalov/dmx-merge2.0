@@ -108,6 +108,10 @@ void main(void) {
 				pc_start_tx(2);
 				break;
 			case 2:
+				pc_tx_buf[0] = cmd;
+				pc_tx_buf[1] = 0;
+				pc_tx_buf[2] = active;
+				pc_start_tx(3);
 				break;
 			}
     	}
@@ -214,6 +218,7 @@ __interrupt void USCI_A1_ISR(void)
 }
 
 static volatile uint16_t pc_read_time = 0;
+static volatile uint16_t switch_to_read_time = 0;
 
 // USCI_A2 - PC r\w
 #pragma vector=USCI_A2_VECTOR
@@ -229,8 +234,6 @@ __interrupt void USCI_A2_ISR(void)
         	pc_read_time = time;
         	if (pc_rx_cnt < 8) {
         		pc_rx_buf[pc_rx_cnt++] = x;
-        	} else {
-        		uca2_read();
         	}
         }
 		break;
@@ -238,6 +241,9 @@ __interrupt void USCI_A2_ISR(void)
         {
         	if (tx_cnt < pc_tx_cnt) {
 				UCA2TXBUF = pc_tx_buf[tx_cnt++];
+        	} else {
+        		tx_cnt = 1;
+        		switch_to_read_time = time + 20;
         	}
         }
 		break;
@@ -254,6 +260,9 @@ __interrupt void TIMER1_A0_ISR(void)
 	if (pc_rx_cnt && (time - pc_read_time > 15)) {
 		pc_rx_cnt = 0;
 		pc_flag = 1;
+	}
+	if (time == switch_to_read_time) {
+		uca2_read();
 	}
 	switch (time & 0x3f) {
 	case 61:
